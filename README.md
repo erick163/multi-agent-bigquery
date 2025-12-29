@@ -1,6 +1,6 @@
 # Multi-Agent BigQuery System
 
-A multi-agent system for GCP billing analysis built with Google's Agent Development Kit (ADK). Features specialized agents for data analysis, forecasting, and business recommendations with read-only BigQuery access.
+A multi-agent system for GCP billing analysis built with Google's Agent Development Kit (ADK).
 
 ## Architecture
 
@@ -11,164 +11,112 @@ coordinator_agent (SequentialAgent)
 └── business_logic_agent  - Business recommendations and regional analysis
 ```
 
-## Quick Start
-
-### 1. Prerequisites
-
-- Python 3.9+
-- GCP project with BigQuery billing export enabled
-- Service account with required permissions
-
-### 2. Installation
+## Quick Start (Local)
 
 ```bash
+# Clone and setup
+git clone https://github.com/erick163/multi-agent-bigquery.git
+cd multi-agent-bigquery
 pip install -r requirements.txt
-```
 
-### 3. Configuration
-
-Copy `.env.example` to `.env` and configure:
-
-```bash
+# Configure
 cp .env.example .env
-```
+# Edit .env with your GCP project details
 
-Required variables:
-- `GOOGLE_CLOUD_PROJECT` - Your GCP project ID
-- `GOOGLE_CLOUD_STAGING_BUCKET` - GCS bucket for Vertex AI
-- `BQ_BILLING_TABLE` - Your billing export table name
-
-### 4. Authentication
-
-```bash
+# Authenticate
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-### 5. Usage
+## GCP Deployment
 
-```python
-from multi_tool_agent_github.agents import coordinator_agent
-
-# Run a complete analysis workflow
-response = coordinator_agent.generate(
-    "Analyze billing data for customer 'acme' and provide cost optimization recommendations"
-)
-```
-
-## GCP VM Deployment (Private, Restricted Access)
-
-### Service Account Permissions
-
-Create a service account with minimal permissions:
+### 1. Create Service Account
 
 ```bash
+export PROJECT_ID=your-project-id
+
 # Create service account
-gcloud iam service-accounts create bq-agent-sa \
-    --display-name="BigQuery Agent Service Account"
+gcloud iam service-accounts create bq-agent-sa --display-name="BigQuery Agent"
 
-# Grant read-only BigQuery access
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-    --member="serviceAccount:bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com" \
-    --role="roles/bigquery.dataViewer"
-
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-    --member="serviceAccount:bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com" \
-    --role="roles/bigquery.jobUser"
-
-# Grant Vertex AI access
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-    --member="serviceAccount:bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com" \
-    --role="roles/aiplatform.user"
-
-# Grant GCS read access for staging bucket
-gsutil iam ch serviceAccount:bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com:objectViewer \
-    gs://YOUR_STAGING_BUCKET
+# Grant permissions
+for role in bigquery.dataViewer bigquery.jobUser aiplatform.user; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:bq-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/$role"
+done
 ```
 
-### VPC Service Controls
-
-Create a perimeter to protect BigQuery and Vertex AI:
+### 2. Create Staging Bucket
 
 ```bash
-# Create access policy (if not exists)
-gcloud access-context-manager policies create \
-    --organization=YOUR_ORG_ID \
-    --title="BQ Agent Policy"
-
-# Create service perimeter
-gcloud access-context-manager perimeters create bq-agent-perimeter \
-    --title="BigQuery Agent Perimeter" \
-    --resources="projects/YOUR_PROJECT_NUMBER" \
-    --restricted-services="bigquery.googleapis.com,aiplatform.googleapis.com,storage.googleapis.com" \
-    --policy=YOUR_POLICY_ID
+gsutil mb -l us-central1 gs://${PROJECT_ID}-agent-staging
 ```
 
-### Private VM Deployment (No SSH)
+### 3. Deploy to Cloud Run
 
 ```bash
-# Create VPC with Private Google Access
-gcloud compute networks create bq-agent-vpc --subnet-mode=custom
+# Create Dockerfile
+cat > Dockerfile << 'EOF'
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+ENV PORT=8080
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+EOF
 
-gcloud compute networks subnets create bq-agent-subnet \
-    --network=bq-agent-vpc \
-    --region=us-central1 \
-    --range=10.0.0.0/24 \
-    --enable-private-ip-google-access
-
-# Create VM with no external IP
-gcloud compute instances create bq-agent-vm \
-    --zone=us-central1-a \
-    --machine-type=e2-medium \
-    --network-interface=network=bq-agent-vpc,subnet=bq-agent-subnet,no-address \
-    --service-account=bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com \
-    --scopes=cloud-platform \
-    --shielded-secure-boot \
-    --shielded-vtpm \
-    --shielded-integrity-monitoring \
-    --metadata-from-file=startup-script=startup.sh
-```
-
-### Cloud Run (Private) Deployment
-
-For HTTP API access within VPC only:
-
-```bash
-# Build container
-gcloud builds submit --tag gcr.io/YOUR_PROJECT/bq-agent
-
-# Deploy to Cloud Run (internal only)
+# Build and deploy
+gcloud builds submit --tag gcr.io/$PROJECT_ID/bq-agent
 gcloud run deploy bq-agent \
-    --image=gcr.io/YOUR_PROJECT/bq-agent \
-    --platform=managed \
-    --region=us-central1 \
-    --service-account=bq-agent-sa@YOUR_PROJECT.iam.gserviceaccount.com \
-    --ingress=internal \
-    --no-allow-unauthenticated \
-    --vpc-connector=YOUR_VPC_CONNECTOR
+  --image=gcr.io/$PROJECT_ID/bq-agent \
+  --region=us-central1 \
+  --service-account=bq-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_STAGING_BUCKET=${PROJECT_ID}-agent-staging,BQ_BILLING_TABLE=your_billing_table" \
+  --no-allow-unauthenticated
 ```
 
-## Security Features
+### 4. Deploy to Compute Engine (Alternative)
 
-- **Read-Only Access**: All BigQuery operations use `WriteMode.BLOCKED`
-- **No External IP**: VM has no public internet access
-- **VPC Service Controls**: Perimeter protection for data access
-- **Minimal IAM**: Service account has only required permissions
-- **Shielded VM**: Secure boot and integrity monitoring enabled
+```bash
+gcloud compute instances create bq-agent-vm \
+  --zone=us-central1-a \
+  --machine-type=e2-medium \
+  --service-account=bq-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+  --scopes=cloud-platform \
+  --metadata=startup-script='#!/bin/bash
+    apt-get update && apt-get install -y python3-pip git
+    git clone https://github.com/erick163/multi-agent-bigquery.git /opt/agent
+    cd /opt/agent && pip3 install -r requirements.txt'
+```
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GOOGLE_CLOUD_PROJECT` | Yes | - | GCP project ID |
-| `GOOGLE_CLOUD_LOCATION` | No | `us-central1` | GCP region |
-| `GOOGLE_CLOUD_STAGING_BUCKET` | Yes | - | GCS staging bucket |
-| `BQ_DATASET_ID` | No | `detailed_billing` | BigQuery dataset |
-| `BQ_BILLING_TABLE` | Yes | - | Billing export table |
-| `BQ_PRICING_TABLE` | No | `cloud_pricing_export` | Pricing table |
-| `BQ_CUSTOMERS_TABLE` | No | `gcp_customers` | Customers table |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_CLOUD_PROJECT` | Yes | GCP project ID |
+| `GOOGLE_CLOUD_STAGING_BUCKET` | Yes | GCS bucket for Vertex AI |
+| `BQ_BILLING_TABLE` | Yes | Billing export table name |
+| `GOOGLE_CLOUD_LOCATION` | No | Region (default: `us-central1`) |
+| `BQ_DATASET_ID` | No | Dataset (default: `detailed_billing`) |
+| `GEMINI_MODEL` | No | Model (default: `gemini-2.5-flash`) |
+
+## Usage
+
+```python
+from agents import coordinator_agent
+
+response = coordinator_agent.generate(
+    "Analyze billing for customer 'acme' and recommend optimizations"
+)
+```
+
+## Security
+
+- **Read-only BigQuery**: All writes blocked via `WriteMode.BLOCKED`
+- **Minimal IAM**: Service account has only required permissions
+- **No secrets in code**: All config via environment variables
 
 ## License
 
-Private repository - internal use only.
+MIT
