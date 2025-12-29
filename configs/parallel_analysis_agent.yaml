@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/google/adk-python/refs/heads/main/src/google/adk/agents/config_schemas/AgentConfig.json
+
+agent_class: ParallelAgent
+name: independent_analyzer
+description: Executes independent analysis tasks in parallel for comprehensive insights
+
+sub_agents:
+  - config_path: subagents/parallel_data_explorer.yaml
+  - config_path: subagents/parallel_cost_analyzer.yaml
+  - config_path: subagents/parallel_trend_analyzer.yaml
+
+# Parallel execution configuration
+execution_config:
+  parallel_execution: true
+  max_concurrent_agents: 3
+  timeout_seconds: 180
+  result_aggregation: merge_by_key
+  
+# Resource management
+resource_config:
+  memory_limit_mb: 512
+  cpu_limit_cores: 2
+  network_timeout_seconds: 60

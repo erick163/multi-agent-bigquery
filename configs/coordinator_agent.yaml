@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/google/adk-python/refs/heads/main/src/google/adk/agents/config_schemas/AgentConfig.json
+
+agent_class: SequentialAgent
+name: data_coordinator
+description: Coordinates customer-specific GCP cost analysis workflow across specialized agents
+
+sub_agents:
+  - config_path: data_analysis_agent.yaml
+  - config_path: forecasting_agent.yaml
+  - config_path: business_logic_agent.yaml
+
+# Optional orchestration configuration
+orchestration_config:
+  error_handling: continue_on_error
+  timeout_seconds: 300
+  result_aggregation: merge_all
+  
+# Execution settings
+execution_config:
+  parallel_execution: false
+  dependency_validation: true
+  resource_sharing: enabled
